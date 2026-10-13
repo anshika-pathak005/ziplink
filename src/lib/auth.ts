@@ -4,7 +4,7 @@
 // PostgreSQL is used only for user account data — no sessions table.
 import { db, schema } from "./db";
 import { eq } from "drizzle-orm";
-import { cache } from "./redis";
+import { cache, type CacheProvider } from "./redis";
 import { logger } from "./logger";
 import type { AuthUser, AuthResponse } from "./types";
 
@@ -27,14 +27,14 @@ export async function hashPassword(password: string): Promise<string> {
     encoder.encode(password),
     "PBKDF2",
     false,
-    ["deriveBits", "deriveKey"]
+    ["deriveBits", "deriveKey"],
   );
   const key = await crypto.subtle.deriveKey(
     { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
     keyMaterial,
     { name: "AES-GCM", length: 256 },
     true,
-    ["encrypt"]
+    ["encrypt"],
   );
   const exported = await crypto.subtle.exportKey("raw", key);
   const saltHex = Array.from(salt)
@@ -50,23 +50,21 @@ export async function verifyPassword(password: string, combinedHash: string): Pr
   const [saltHex, hashHex] = combinedHash.split(":");
   if (!saltHex || !hashHex) return false;
 
-  const salt = new Uint8Array(
-    saltHex.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) || []
-  );
+  const salt = new Uint8Array(saltHex.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) || []);
   const encoder = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
     encoder.encode(password),
     "PBKDF2",
     false,
-    ["deriveBits", "deriveKey"]
+    ["deriveBits", "deriveKey"],
   );
   const key = await crypto.subtle.deriveKey(
     { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
     keyMaterial,
     { name: "AES-GCM", length: 256 },
     true,
-    ["encrypt"]
+    ["encrypt"],
   );
   const exported = await crypto.subtle.exportKey("raw", key);
   const testHashHex = Array.from(new Uint8Array(exported))
@@ -78,7 +76,10 @@ export async function verifyPassword(password: string, combinedHash: string): Pr
 // --------------------------------------------------------------------------
 // In-memory fallback when PostgreSQL DATABASE_URL is not configured
 // --------------------------------------------------------------------------
-const localUsersMap = new Map<string, { id: string; name: string; email: string; passwordHash: string; createdAt: number }>();
+const localUsersMap = new Map<
+  string,
+  { id: string; name: string; email: string; passwordHash: string; createdAt: number }
+>();
 
 export function generateToken(length = 32): string {
   const bytes = crypto.getRandomValues(new Uint8Array(length));
@@ -89,38 +90,68 @@ export function generateToken(length = 32): string {
 
 // --------------------------------------------------------------------------
 // Redis session helpers
+// Each helper reports the provider that ACTUALLY handled the operation
+// (UPSTASH / LOCAL / FALLBACK), as returned by the cache layer, so logs never
+// claim Redis persistence for a session that only lives in memory.
 // --------------------------------------------------------------------------
-async function storeSession(token: string, userId: string): Promise<void> {
+async function storeSession(token: string, userId: string): Promise<CacheProvider> {
   const payload = JSON.stringify({ userId, expiresAt: Date.now() + SESSION_TTL_SECONDS * 1000 });
-  await cache.set(`session:${token}`, payload, SESSION_TTL_SECONDS);
+  const { provider } = await cache.setWithProvider(
+    `session:${token}`,
+    payload,
+    SESSION_TTL_SECONDS,
+  );
+  return provider;
 }
 
-async function resolveSessionUserId(token: string): Promise<string | null> {
+async function resolveSession(
+  token: string,
+): Promise<{ userId: string; provider: CacheProvider; note?: string } | null> {
   if (!token) return null;
-  const raw = await cache.get(`session:${token}`);
+  const { value: raw, provider, promotedTo } = await cache.getWithProvider(`session:${token}`);
   if (!raw) return null;
   try {
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (parsed.expiresAt > Date.now()) return parsed.userId as string;
+    if (parsed.expiresAt > Date.now()) {
+      return {
+        userId: parsed.userId as string,
+        provider,
+        ...(promotedTo
+          ? {
+              note: `promoted from memory to ${promotedTo === "UPSTASH" ? "Upstash" : "local"} Redis`,
+            }
+          : {}),
+      };
+    }
   } catch {}
   return null;
 }
 
 export async function destroySession(token: string): Promise<void> {
-  logger.session("DESTROYED", undefined, token);
-  await cache.del(`session:${token}`);
+  const { provider } = await cache.delWithProvider(`session:${token}`);
+  logger.session(
+    "DESTROYED",
+    undefined,
+    token,
+    provider,
+    provider === "FALLBACK"
+      ? "removed from memory only (no Redis delete was performed)"
+      : undefined,
+  );
 }
 
 // --------------------------------------------------------------------------
 // Resolves the authenticated user from a raw session token.
 // --------------------------------------------------------------------------
 export async function getUserByToken(token: string): Promise<AuthUser | null> {
-  const userId = await resolveSessionUserId(token);
-  if (!userId) return null;
+  const session = await resolveSession(token);
+  if (!session) return null;
+  const { userId, provider, note } = session;
 
   if (db) {
     const [u] = await db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
     if (!u) return null;
+    logger.session("VALIDATED", u.id, token, provider, note);
     return {
       id: u.id,
       name: u.name,
@@ -133,6 +164,7 @@ export async function getUserByToken(token: string): Promise<AuthUser | null> {
 
   const u = localUsersMap.get(userId);
   if (!u) return null;
+  logger.session("VALIDATED", u.id, token, provider, note);
   return { id: u.id, name: u.name, email: u.email, role: "user", createdAt: u.createdAt };
 }
 
@@ -162,7 +194,11 @@ export async function registerUser(input: {
   }
 
   if (db) {
-    const existing = await db.select().from(schema.users).where(eq(schema.users.email, email)).limit(1);
+    const existing = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.email, email))
+      .limit(1);
     if (existing.length > 0) {
       logger.auth("SIGNUP", email, false, "Email already exists");
       return { ok: false, error: "An account with this email already exists." };
@@ -194,11 +230,11 @@ export async function registerUser(input: {
   }
 
   const token = generateToken();
-  await storeSession(token, userId);
+  const provider = await storeSession(token, userId);
 
   const user: AuthUser = { id: userId, name, email, role: "user", createdAt: Date.now() };
-  logger.auth("SIGNUP", email, true, undefined, userId);
-  logger.session("CREATED", userId, token);
+  logger.auth("SIGNUP", email, true, undefined, userId, provider);
+  logger.session("CREATED", userId, token, provider);
   return { ok: true, user, token };
 }
 
@@ -213,15 +249,30 @@ export async function loginUser(input: {
   const email = input.email.trim().toLowerCase();
 
   let targetUser:
-    | { id: string; name: string; email: string; passwordHash: string; avatarUrl?: string | null; role?: string; createdAt?: any }
+    | {
+        id: string;
+        name: string;
+        email: string;
+        passwordHash: string;
+        avatarUrl?: string | null;
+        role?: string;
+        createdAt?: any;
+      }
     | undefined;
 
   if (db) {
-    const [userRecord] = await db.select().from(schema.users).where(eq(schema.users.email, email)).limit(1);
+    const [userRecord] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.email, email))
+      .limit(1);
     targetUser = userRecord;
   } else {
     for (const u of localUsersMap.values()) {
-      if (u.email === email) { targetUser = u; break; }
+      if (u.email === email) {
+        targetUser = u;
+        break;
+      }
     }
   }
 
@@ -237,7 +288,7 @@ export async function loginUser(input: {
   }
 
   const token = generateToken();
-  await storeSession(token, targetUser.id);
+  const provider = await storeSession(token, targetUser.id);
 
   const user: AuthUser = {
     id: targetUser.id,
@@ -251,7 +302,7 @@ export async function loginUser(input: {
         : new Date(targetUser.createdAt || Date.now()).getTime(),
   };
 
-  logger.auth("LOGIN", email, true, undefined, targetUser.id);
-  logger.session("CREATED", targetUser.id, token);
+  logger.auth("LOGIN", email, true, undefined, targetUser.id, provider);
+  logger.session("CREATED", targetUser.id, token, provider);
   return { ok: true, user, token };
 }

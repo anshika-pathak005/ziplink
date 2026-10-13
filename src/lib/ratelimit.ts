@@ -25,12 +25,14 @@ export const RATE_LIMIT_CONFIGS = {
   GUEST_SHORTEN: {
     limit: 10,
     windowSeconds: 10 * 60, // 10 minutes
-    errorMessage: "Guest URL creation rate limit exceeded (10 links / 10 min). Please create a free account for higher limits.",
+    errorMessage:
+      "Guest URL creation rate limit exceeded (10 links / 10 min). Please create a free account for higher limits.",
   },
   AUTH_SHORTEN: {
     limit: 60,
     windowSeconds: 60, // 1 minute
-    errorMessage: "Rate limit exceeded (60 links / min). Please wait a moment before creating more links.",
+    errorMessage:
+      "Rate limit exceeded (60 links / min). Please wait a moment before creating more links.",
   },
 } as const;
 
@@ -72,7 +74,7 @@ export function getClientIp(): string {
 export async function checkRateLimit(
   action: "LOGIN" | "SIGNUP" | "GUEST_SHORTEN" | "AUTH_SHORTEN",
   identifier: string,
-  customConfig?: Partial<RateLimitConfig>
+  customConfig?: Partial<RateLimitConfig>,
 ): Promise<RateLimitResult> {
   const config: RateLimitConfig = {
     ...RATE_LIMIT_CONFIGS[action],
@@ -80,7 +82,8 @@ export async function checkRateLimit(
   };
 
   const redisKey = `ratelimit:${action.toLowerCase()}:${identifier}`;
-  const current = await cache.incr(redisKey);
+  // `provider` is the store that actually counted this hit (UPSTASH / LOCAL / FALLBACK), used for accurate 429 logs.
+  const { value: current, provider } = await cache.incrWithProvider(redisKey);
 
   // If this is the first hit in the window (or if TTL was missing), set the expiration
   if (current === 1) {
@@ -97,7 +100,7 @@ export async function checkRateLimit(
   const allowed = current <= config.limit;
 
   if (!allowed) {
-    logger.rateLimit(action, identifier, config.limit, config.windowSeconds);
+    logger.rateLimit(action, identifier, config.limit, config.windowSeconds, provider);
     return {
       allowed: false,
       limit: config.limit,
