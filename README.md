@@ -1,118 +1,113 @@
-# ZipLink
 
-A URL shortener that converts long URLs into short links.
+# ZipLink — URL Shortener
 
-## Tech stack
+[![TypeScript](https://img.shields.io/badge/TypeScript-Language-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Database-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Drizzle ORM](https://img.shields.io/badge/Drizzle_ORM-ORM-C5F74F?logo=drizzle&logoColor=black)](https://orm.drizzle.team/)
+[![Redis](https://img.shields.io/badge/Redis-Caching-DC382D?logo=redis&logoColor=white)](https://redis.io/)
+[![Docker](https://img.shields.io/badge/Docker-Containerization-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-Styling-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![Render](https://img.shields.io/badge/Render-Deployed-46E3B7?logo=render&logoColor=black)](https://render.com/)
 
-Taken from `package.json` and the source files provided:
+A full-stack URL shortening application built to explore caching strategies, Redis integration, rate limiting, and Docker-based deployment.
 
-- TanStack Start (React 19, TanStack Router), Vite 8, Tailwind CSS 4
-- Nitro 3 (beta) for the production server build
-- PostgreSQL via Drizzle ORM (`drizzle-orm`, `postgres`, `drizzle-kit`)
-- Redis: Upstash REST (`@upstash/redis`) or a standard Redis server (`ioredis`), with an in-memory fallback
-- Package manager: Bun (`bun.lock`)
+**Live Demo:** https://ziplink-hah1.onrender.com  
+**GitHub Repository:** https://github.com/anshika-pathak005/ziplink
 
-## Project structure
+## Features
 
-```
-src/
-  routes/          File-based routes (home, $slug redirect, auth/login, auth/signup, dashboard)
-  components/      UI components (shadcn/ui in components/ui)
-  lib/             Server logic: auth, shortener, ratelimit, redis, server functions
-  lib/db/          Drizzle connection and schema
-  server.ts        Server entry (wraps TanStack Start with an error page fallback)
-  start.ts         Request middleware (error handling, CSRF for server functions)
-drizzle.config.ts  Drizzle Kit config (schema: src/lib/db/schema.ts, output: ./drizzle)
-```
+- **URL Shortening:** Convert long URLs into short, shareable links with automatic redirection.
+- **User Authentication:** Sign up and log in to access a personalized dashboard.
+- **Link Management:** View and manage shortened URLs from the dashboard.
+- **Redis Caching:** Implement caching using Upstash Redis and a standard Redis server to understand cache integration and improve repeated data access.
+- **Rate Limiting:** Restrict repeated requests to authentication and URL-shortening endpoints.
+- **Fallback Handling:** Support alternative Redis configurations, including an in-memory fallback when an external Redis provider is unavailable.
+- **Docker Containerization:** Build and run the application inside a Docker container using a multi-stage Dockerfile.
+- **Cloud Deployment:** Deploy the application on Render with environment-based configuration.
 
-## Prerequisites
+## Tech Stack
 
-- [Bun](https://bun.sh)
-- A PostgreSQL database
-- Optional: Redis or an Upstash Redis database
-- Optional: Docker
+- **Frontend:** React, TanStack Start, TanStack Router, Tailwind CSS
+- **Backend:** TanStack Start server functions, TypeScript
+- **Database:** PostgreSQL, Drizzle ORM
+- **Caching & Rate Limiting:** Redis, Upstash Redis
+- **Containerization:** Docker
+- **Deployment:** Render
+- **Build Tools:** Vite, Nitro
 
-## Setup
+## Getting Started
 
-```bash
-bun install
-cp .env.example .env   # then fill in your own values
-bun run dev            # http://localhost:3000
-```
+### Prerequisites
 
-## Scripts
+- [Bun](https://bun.sh/)
+- PostgreSQL
+- Redis or Upstash Redis
 
-| Script | Command |
-| --- | --- |
-| `dev` | `vite dev --port 3000` |
-| `build` | `vite build` (produces `.output/` via Nitro) |
-| `build:dev` | `vite build --mode development` |
-| `preview` | `vite preview` |
-| `lint` | `eslint .` |
-| `format` | `prettier --write .` |
+### Installation
 
-There is no `start` script. The production server is started with `node .output/server/index.mjs`.
+1. Clone the repository:
 
-## Environment variables
+   ```bash
+   git clone https://github.com/anshika-pathak005/ziplink.git
+   cd ziplink
+   ```
 
-All variables are read at runtime from `process.env`. None are needed at build time.
+2. Install dependencies:
+
+   ```bash
+   bun install
+   ```
+
+3. Create your environment file:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+4. Configure the required environment variables in `.env`.
+
+5. Apply the database schema:
+
+   ```bash
+   bunx drizzle-kit push
+   ```
+
+6. Start the development server:
+
+   ```bash
+   bun run dev
+   ```
+
+   Open `http://localhost:3000`.
+
+## Environment Variables
 
 | Variable | Purpose |
-| --- | --- |
-| `DATABASE_URL` | PostgreSQL connection string. |
-| `APP_URL` | Public base URL used to build short links. Falls back to `SITE_URL`, then `VITE_APP_URL`, then `http://localhost:3000`. **Set it in production**, otherwise links point at localhost. |
-| `NODE_ENV` | `production` enables secure cookies and quieter cache logging. |
-| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis. Used when both are set. |
-| `REDIS_URL` | Standard Redis (TCP). Used only if the Upstash variables are not set. |
-| `PORT` / `HOST` | Not read by the app code. Handled by the Nitro server (see Docker). |
+|---|---|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `APP_URL` | Base URL used to generate short links |
+| `UPSTASH_REDIS_REST_URL` | Upstash Redis endpoint |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis authentication token |
+| `REDIS_URL` | Standard Redis connection URL |
+| `NODE_ENV` | Application environment |
 
-`.env.example` also lists `SESSION_SECRET`, but no code under `src/` reads it.
-
-### Redis behavior
-
-Provider choice: Upstash if both Upstash variables are set, otherwise `REDIS_URL`, otherwise an in-memory cache. In-memory data (including sessions) is lost on restart and not shared between instances. In production the "no provider configured" case is not logged, so check that your variables are set.
-
-## Database and migrations
-
-Drizzle Kit reads `DATABASE_URL` and the schema at `src/lib/db/schema.ts`. No `db:*` scripts or `drizzle/` migration folder were provided, so the migration workflow is not documented here yet. Run Drizzle Kit commands from your machine against the target database, for example:
-
-```bash
-bunx drizzle-kit push
-```
-
-Not run or verified yet. The Docker image does not apply the schema.
+Configure either both Upstash Redis variables or a standard Redis URL. Keep credentials in environment variables and never commit `.env`.
 
 ## Docker
 
+Build the Docker image and run the application:
+
 ```bash
 docker build -t ziplink .
-docker run --rm -p 3000:3000 -e PORT=3000 --env-file .env.docker ziplink
+docker run --rm -p 3000:10000 --env-file .env.docker ziplink
 ```
 
-Notes:
+Provide the required environment variables before starting the container.
 
-- The image builds with Bun on Node 22, then runs `node .output/server/index.mjs` on Node 22 as a non-root user.
-- `--env-file` does not strip quotes. In `.env.docker`, write values without quotes (`APP_URL=http://localhost:3000`) and do not set `NODE_ENV=development`.
-- Inside a container, `localhost` is the container itself. Use `host.docker.internal` for a database or Redis running on your host.
-- With `NODE_ENV=production`, session cookies are `secure`, so some browsers may not keep them over plain `http://localhost`.
+## Author
 
-## Deploy to Render
+**Anshika Pathak**
 
-1. Push the repository to GitHub/GitLab.
-2. Create a **Web Service** and choose **Docker** as the runtime (Dockerfile at the repo root).
-3. Add environment variables: `DATABASE_URL`, `APP_URL` (your Render URL or custom domain), and either the two Upstash variables or `REDIS_URL`.
-4. Render injects `PORT`; the Dockerfile sets `HOST=0.0.0.0`.
-5. Apply the database schema before first use (see above).
-
-## Security notes
-
-- Never commit `.env` or real credentials. `.dockerignore` excludes `.env` and `.env.*` (except `.env.example`).
-- Pass secrets through your host's environment settings, not build args.
-- Server functions are protected by CSRF middleware (`src/start.ts`).
-
-## Troubleshooting
-
-- **Short links show `localhost:3000`**: `APP_URL` is not set.
-- **Sessions lost after restart or redeploy**: no Redis provider is configured, so the in-memory cache is in use.
-- **Cannot stay logged in when running the production image locally**: secure cookie over plain HTTP (see Docker notes).
-- **403 on login/signup after deploy**: check the CSRF middleware behavior behind Render's proxy.
+- GitHub: [anshika-pathak005](https://github.com/anshika-pathak005)
+- LinkedIn: [LinkedIn Profile](https://www.linkedin.com/in/anshikapathak7/)
