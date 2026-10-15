@@ -12,7 +12,7 @@
 
 A full-stack URL shortening application built to explore caching strategies, Redis integration, rate limiting, and Docker-based deployment.
 
-**Live Demo:** https://ziplink-hah1.onrender.com  
+**Live Demo:** [ZipLink](https://ziplink-hah1.onrender.com)  
 **GitHub Repository:** https://github.com/anshika-pathak005/ziplink
 
 ## Features
